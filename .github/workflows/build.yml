@@ -19,7 +19,7 @@ jobs:
     env:
       RAVEN_COMMIT: 81011f061e53ef1289ebcab36dc3622cea05c76d
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Patch hash matches the value recorded in the build script
         run: |
