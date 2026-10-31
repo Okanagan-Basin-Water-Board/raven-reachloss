@@ -1,0 +1,65 @@
+name: build-and-check
+
+# Applies the reach-loss patch to the pinned upstream Raven v4.12 commit and compiles it on Linux.
+# Fails if the patch hash changes without the recorded value being updated, if the patch does not apply,
+# if the marker counts change, or if the build fails. The Mission Creek harness needs private data and is not run here.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      RAVEN_COMMIT: 81011f061e53ef1289ebcab36dc3622cea05c76d
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch hash matches the value recorded in the build script
+        run: |
+          rec=$(grep '^PATCH_SHA=' scripts/build_reachloss_macos.sh | cut -d'"' -f2)
+          act=$(sha256sum patches/OBWB_RavenReachLoss_v1_20261031.diff | cut -d' ' -f1)
+          echo "recorded $rec"; echo "actual   $act"
+          test "$rec" = "$act"
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake clang libnetcdf-dev patch
+
+      - name: Fetch upstream Raven at the pinned commit
+        run: |
+          git clone --quiet https://github.com/CSHS-CWRA/RavenHydroFramework raven
+          git -C raven checkout --quiet "$RAVEN_COMMIT"
+          test "$(git -C raven rev-parse HEAD)" = "$RAVEN_COMMIT"
+
+      - name: Apply the patch and check markers
+        run: |
+          cd raven && patch -p1 < ../patches/OBWB_RavenReachLoss_v1_20261031.diff
+          for f in SubBasin.h:2 SubBasin.cpp:5 Solvers.cpp:2 Model.cpp:2 ParseTimeSeriesFile.cpp:2; do
+            n=$(grep -c 'OBWB patch D181' "src/${f%%:*}"); echo "${f%%:*} $n (expect ${f##*:})"; test "$n" = "${f##*:}"
+          done
+
+      - name: Regenerating the patch from tools/apply_reachloss.py gives the same source
+        run: |
+          git clone --quiet https://github.com/CSHS-CWRA/RavenHydroFramework regen
+          git -C regen checkout --quiet "$RAVEN_COMMIT"
+          python3 tools/apply_reachloss.py regen
+          diff -r raven/src regen/src
+
+      - name: Build (netCDF on, lp_solve off)
+        run: |
+          cd raven
+          CC=clang CXX=clang++ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release > /dev/null
+          cmake --build build -j "$(nproc)" 2>&1 | tail -5
+          ./build/Raven -v | head -1
+
+      - name: Harness compiles
+        run: python3 -m py_compile mission_creek/reachloss_mc.py tools/apply_reachloss.py
+
+      - name: House style (no em dashes in text files)
+        run: "! grep -rIl $'\\xe2\\x80\\x94' --exclude-dir=.git ."

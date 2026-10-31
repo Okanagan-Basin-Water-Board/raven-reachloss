@@ -1,0 +1,6 @@
+dist/
+build/
+runs/
+__pycache__/
+*.pyc
+mission_creek/run_log.txt
